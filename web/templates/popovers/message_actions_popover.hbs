@@ -6,6 +6,7 @@
             <a role="menuitem" data-message-id="{{message_id}}" class="quote_to_new_topic_button popover-menu-link" tabindex="0">
                 <i class="popover-menu-icon zulip-icon zulip-icon-quote-message" aria-hidden="true"></i>
                 <span class="popover-menu-label">{{t "Quote to new topic" }}</span>
+                {{popover_hotkey_hints "M"}}
             </a>
         </li>
         {{/if}}
@@ -43,7 +44,6 @@
             <a role="menuitem" data-message-id="{{message_id}}" class="popover_move_message popover-menu-link" tabindex="0">
                 <i class="popover-menu-icon zulip-icon zulip-icon-move-alt" aria-hidden="true"></i>
                 <span class="popover-menu-label">{{move_message_menu_item}}</span>
-                {{popover_hotkey_hints "M"}}
             </a>
         </li>
         {{/if}}

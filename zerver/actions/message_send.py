@@ -1759,6 +1759,19 @@ def check_message(
             stream = addressee.stream()
         assert stream is not None
 
+        # CashTime: non-web clients (mobile, Flutter, integrations) cannot
+        # use the Web "Quote to new topic" popover entry. If such a client
+        # sends a Zulip-formatted quoted reply, redirect the message to a
+        # new topic derived from the quoted body, mirroring the Web
+        # behaviour. See zerver/lib/cashtime_quote_to_topic.py.
+        from zerver.lib.cashtime_quote_to_topic import maybe_topic_from_quote
+
+        redirected_topic = maybe_topic_from_quote(
+            client.name, stream, topic_name, message_content
+        )
+        if redirected_topic is not None:
+            topic_name = truncate_topic(redirected_topic)
+
         # To save a database round trip, we construct the Recipient
         # object for the Stream rather than fetching it from the
         # database using the stream.recipient foreign key.

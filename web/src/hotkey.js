@@ -43,6 +43,7 @@ import * as playground_links_popover from "./playground_links_popover.ts";
 import * as pm_list from "./pm_list.ts";
 import * as popover_menus from "./popover_menus.ts";
 import * as popovers from "./popovers.ts";
+import * as quote_to_new_topic from "./quote_to_new_topic.ts";
 import * as reactions from "./reactions.ts";
 import * as read_receipts from "./read_receipts.ts";
 import * as recent_view_ui from "./recent_view_ui.ts";
@@ -167,7 +168,7 @@ const KEYDOWN_MAPPINGS = {
     J: {name: "vim_down", message_view_only: true},
     K: {name: "vim_up", message_view_only: true},
     L: {name: "vim_right", message_view_only: true},
-    M: {name: "move_message", message_view_only: true},
+    M: {name: "quote_to_new_topic", message_view_only: true},
     N: {name: "n_key", message_view_only: false},
     P: {name: "p_key", message_view_only: false},
     Q: {name: "query_streams", message_view_only: true},
@@ -1436,6 +1437,13 @@ export function process_hotkey(e, hotkey) {
             }
 
             stream_popover.build_move_topic_to_stream_popover(msg.stream_id, msg.topic, false, msg);
+            return true;
+        }
+        case "quote_to_new_topic": {
+            if (msg.type !== "stream" || !message_edit.can_move_message(msg)) {
+                return false;
+            }
+            quote_to_new_topic.execute_quote_to_new_topic(msg);
             return true;
         }
         case "toggle_read_receipts": {
