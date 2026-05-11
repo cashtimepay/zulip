@@ -1304,6 +1304,8 @@
   "Question": "Вопрос",
   "Quote": "Цитата",
   "Quote message": "Цитировать сообщение",
+  "Quote to new topic": "Цитировать в новую тему",
+  "Failed to move message to a new topic.": "Не удалось перенести сообщение в новую тему.",
   "Quoted original email (in replies)": "Цитируемое сообщение (в ответах)",
   "React to selected message with": "Реагировать на выбранное сообщение",
   "Reactions": "Реакции",

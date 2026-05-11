@@ -17,6 +17,7 @@ import * as message_viewport from "./message_viewport.ts";
 import * as popover_menus from "./popover_menus.ts";
 import * as popover_menus_data from "./popover_menus_data.ts";
 import * as popovers from "./popovers.ts";
+import * as quote_to_new_topic from "./quote_to_new_topic.ts";
 import * as read_receipts from "./read_receipts.ts";
 import * as rows from "./rows.ts";
 import * as stream_popover from "./stream_popover.ts";
@@ -123,6 +124,17 @@ export function initialize({
                     message_id,
                     quote_content,
                 });
+                e.preventDefault();
+                e.stopPropagation();
+                popover_menus.hide_current_popover_if_visible(instance);
+            });
+
+            $popper.one("click", ".quote_to_new_topic_button", (e) => {
+                assert(message_lists.current !== undefined);
+                const message = message_lists.current.get(message_id);
+                if (message !== undefined && message.type === "stream") {
+                    quote_to_new_topic.execute_quote_to_new_topic(message);
+                }
                 e.preventDefault();
                 e.stopPropagation();
                 popover_menus.hide_current_popover_if_visible(instance);
