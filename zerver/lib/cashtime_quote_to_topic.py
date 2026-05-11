@@ -19,10 +19,13 @@ sibling quotes pile up in one place.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Optional
 
 from zerver.models import Message, Stream
+
+logger = logging.getLogger("zulip.cashtime_quote_to_topic")
 
 TOPIC_WORD_COUNT = 10
 TOPIC_MAX_LENGTH = 60
@@ -40,11 +43,18 @@ def _is_web_client(client_name: str) -> bool:
 
 
 # Matches a Zulip quoted reply header at the start of the message body.
+# Tolerates:
+#   * Any number of backticks (>= 3) in the quote fence — Zulip widens
+#     the fence when the quoted body itself contains a quote block, so
+#     we see ```quote, ````quote, `````quote, etc., depending on depth.
+#   * Any localised verb in square brackets — Zulip translates "said"
+#     for the client's locale (EN [said], UK [сказав], DE [schrieb], …).
 # Examples (both raw and HTML-escape-free):
-#   @_**Дмитрий Радионов|7** [said](https://chat.cashtimepay.com/#narrow/...):
-#   @**Александр|3** [said](https://example.com/#narrow/.../near/12345):
+#   @_**Дмитрий Радионов|7** [said](https://chat.cashtimepay.com/#narrow/.../near/123):\n```quote\n
+#   @_**Eugene_Art|13** [said](https://example.com/.../near/3126):\n````quote\n
+#   @**Александр|3** [сказав](https://example.com/.../near/12345):\n```quote\n
 _QUOTE_HEADER_RE = re.compile(
-    r"^@_?\*\*[^*|]+(?:\|\d+)?\*\*\s+\[said\]\(([^)]+)\):\s*\n```quote\n",
+    r"^@_?\*\*[^*|]+(?:\|\d+)?\*\*\s+\[[^\]]+\]\(([^)]+)\):\s*\n`{3,}quote\n",
     re.MULTILINE,
 )
 
@@ -67,6 +77,15 @@ def _extract_quoted_message_id(content: str) -> Optional[int]:
 
 
 # --- text cleaning (mirrors web/src/quote_to_new_topic.ts) -------------------
+
+# Strip a leading Zulip quote-reply prefix from a message body: the
+# "@_**user|id** [said](url):" header and the entire ```quote ... ```
+# block that follows (with matched backtick width).
+_LEADING_QUOTE_BLOCK_RE = re.compile(
+    r"^@_?\*\*[^*|]+(?:\|\d+)?\*\*\s+\[[^\]]+\]\([^)]+\):\s*\n"
+    r"(`{3,})quote\n[\s\S]*?\n\1\s*\n?",
+    re.MULTILINE,
+)
 
 _FENCED_CODE_RE = re.compile(r"```[\s\S]*?```")
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
@@ -106,6 +125,10 @@ def clean_for_topic_name(raw: str) -> str:
     derive identical topic names from identical inputs.
     """
     s = raw
+    # If the source message itself starts with a quoted-reply block,
+    # drop that block first so we name the new topic after the
+    # quoter's own words, not after the inner quote's author.
+    s = _LEADING_QUOTE_BLOCK_RE.sub("", s, count=1)
     s = _FENCED_CODE_RE.sub(" ", s)
     s = _INLINE_CODE_RE.sub(" ", s)
     s = _BLOCKQUOTE_RE.sub(" ", s)
@@ -166,6 +189,65 @@ def _resolve_topic_collision(stream: Stream, candidate: str) -> str:
     return existing if existing is not None else candidate
 
 
+def _maybe_topic_from_quote_inner(
+    client_name: str,
+    stream: Stream,
+    current_topic: str,
+    content: str,
+) -> Optional[str]:
+    if _is_web_client(client_name):
+        logger.info("cashtime-quote: skip web client=%s", client_name)
+        return None
+
+    quoted_id = _extract_quoted_message_id(content)
+    if quoted_id is None:
+        logger.info(
+            "cashtime-quote: no quote header for client=%s content_head=%r",
+            client_name,
+            content[:200],
+        )
+        return None
+
+    try:
+        quoted = Message.objects.only("content", "recipient_id").get(id=quoted_id)
+    except Message.DoesNotExist:
+        logger.info(
+            "cashtime-quote: quoted message id=%s not found (client=%s)",
+            quoted_id,
+            client_name,
+        )
+        return None
+
+    if quoted.recipient_id != stream.recipient_id:
+        logger.info(
+            "cashtime-quote: quoted message id=%s lives in recipient=%s, not stream=%s",
+            quoted_id,
+            quoted.recipient_id,
+            stream.recipient_id,
+        )
+        return None
+
+    candidate = clean_for_topic_name(quoted.content)
+    resolved = _resolve_topic_collision(stream, candidate)
+
+    if resolved.casefold() == (current_topic or "").casefold():
+        logger.info(
+            "cashtime-quote: resolved topic %r equals current %r — skip",
+            resolved,
+            current_topic,
+        )
+        return None
+
+    logger.info(
+        "cashtime-quote: REDIRECT client=%s quoted_id=%s old_topic=%r new_topic=%r",
+        client_name,
+        quoted_id,
+        current_topic,
+        resolved,
+    )
+    return resolved
+
+
 def maybe_topic_from_quote(
     client_name: str,
     stream: Stream,
@@ -173,7 +255,8 @@ def maybe_topic_from_quote(
     content: str,
 ) -> Optional[str]:
     """Return a new topic name for the message, or ``None`` to keep
-    *current_topic*.
+    *current_topic*. Never raises — any internal failure is logged and
+    we fall back to the original topic to avoid breaking message send.
 
     Conditions under which a redirect happens:
     * Client is not a known web/desktop client (mobile, integration, etc.).
@@ -182,25 +265,11 @@ def maybe_topic_from_quote(
     * The derived topic name differs (case-insensitively) from the
       current topic — otherwise there is nothing to redirect.
     """
-    if _is_web_client(client_name):
-        return None
-
-    quoted_id = _extract_quoted_message_id(content)
-    if quoted_id is None:
-        return None
-
     try:
-        quoted = Message.objects.only("content", "recipient_id").get(id=quoted_id)
-    except Message.DoesNotExist:
+        return _maybe_topic_from_quote_inner(client_name, stream, current_topic, content)
+    except Exception:
+        logger.exception(
+            "cashtime-quote: unexpected failure (client=%s) — keeping original topic",
+            client_name,
+        )
         return None
-
-    if quoted.recipient_id != stream.recipient_id:
-        return None
-
-    candidate = clean_for_topic_name(quoted.content)
-    resolved = _resolve_topic_collision(stream, candidate)
-
-    if resolved.casefold() == (current_topic or "").casefold():
-        return None
-
-    return resolved
